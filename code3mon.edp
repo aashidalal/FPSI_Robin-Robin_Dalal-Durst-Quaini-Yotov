@@ -1,0 +1,676 @@
+//This code solves Monolithic Scheme (Section 6.1 Robin-Robin FPSI paper)
+//Author: Aashi Dalal
+load "Element_Mixte"
+load "medit"
+load "Element_P3"
+load "iovtk"
+
+//load "UMFPACK64" 
+
+// MACRO:
+macro div(ax,ay) (dx(ax)+dy(ay))//
+macro sigmaEnx(ax,ay) (muS*(2.0*dx(ax)*N.x + (dx(ay)+dy(ax))*N.y) + lambdaS*(div(ax,ay))*N.x)//
+macro sigmaEny(ax,ay) (muS*(2.0*dy(ay)*N.y + (dx(ay)+dy(ax))*N.x) + lambdaS*(div(ax,ay))*N.y)//
+macro sigmaFnx(ax,ay) (muF*(dx(ax)*N.x + dy(ax)*N.y))//
+macro sigmaFny(ax,ay) (muF*(dy(ay)*N.y + dx(ay)*N.x))//
+macro sigmasymFnx(ax,ay) (ci*muF*(dx(ax)*N.x + dy(ax)*N.y))//
+macro sigmasymFny(ax,ay) (ci*muF*(dy(ay)*N.y + dx(ay)*N.x))//
+macro cdot(ax,ay,bx,by) (ax*bx+ay*by)//
+macro tgx(ax,ay) (ax-cdot(ax,ay,N.x,N.y)*N.x)//
+macro tgy(ax,ay) (ay-cdot(ax,ay,N.x,N.y)*N.y)//
+
+
+
+int Tfx = -N.y;
+int Tfy = N.x;
+int Tpx = N.y;
+int Tpy = -N.x;
+int Npx = -N.x;
+int Npy = -N.y;
+
+// time:
+real T=1.0;
+real delt=0.1;//we change delt=0.2,0.1,0.05,0.025,0.0125
+real t=0.0;
+int pr=1;
+func NN=T/delt;//Number of time interval
+
+//real tol1,tol2, t;
+ 
+// FLAGS:
+bool debug=false;	   // true for debuging, mesh plots etc.
+bool plotflag=0;   // true for making .vtk files
+bool converg=false;	   // true for convergence test     (output made in reverse order, from finer mesh to coarser)
+bool intresid=1;   // true for interface residual	(output made in reverse order, from finer mesh to coarser)
+int timedep=0;
+
+int m,n,l;
+
+if(converg){
+	m = 32;
+	l = 2;
+} else {
+	m=32;
+	l=m;
+}
+
+int number = log(real(m/l))/log(2.0) + 1; //NUMBER OF MESH REFINEMENTS
+cout << "Number of mesh refinements: " << number << endl;
+
+int count=0;
+
+// initialize arrays for errors
+real[int] error1(number);//FLUID PRESSURE(L2 in space )
+real[int] error2(number);//FLUID VELOCITY(H1 in space)
+real[int] error3(number);//DARCY PRESSURE(L2 in space)
+real[int] error4(number);//DARCY VELOCITY(L2 in space)
+real[int] error5(number);//DISPLACEMENT(H1 in space)
+real[int] error6(number);//DISPLACEMENT DERIVATIVE(L2 in space)
+real[int] error7(number);//MU(L2 in space)
+
+
+
+real[int] rate1(number);// initialize the rate
+real[int] rate2(number);
+real[int] rate3(number);
+real[int] rate4(number);
+real[int] rate5(number);
+real[int] rate6(number);
+real[int] rate7(number);
+
+
+
+error1 = 0;
+error2 = 0;
+error3 = 0;
+error4 = 0;
+error5 = 0;
+error6 = 0;
+error7 = 0;
+
+real[int] error2tmp(NN);
+real[int] error3tmp(NN);
+real[int] error5tmp(NN);
+real[int] error6tmp(NN);
+real[int] error7tmp(NN);
+
+
+error2tmp = 0;
+error3tmp = 0;
+error5tmp = 0;
+error6tmp = 0;
+error7tmp = 0;
+
+
+// h-TEST LOOP:
+for(int n=l;n<=m;n*=2){
+	
+	t=0;
+	
+	mesh ThF = square(n,n,flags=3);
+	mesh ThS1 = square(n,n,flags=3);
+  ThS1 = movemesh(ThS1, [x,y-1]);
+
+  mesh ThL = emptymesh(ThF);
+		
+	cout << "lala"<< endl;
+  
+	
+	if(debug){
+		plot(ThF,ThS1, wait=true);
+    plot(ThL,ThS1, wait=true);
+		
+	
+		int nbtriangles=ThL.nt;
+		for (int i=0;i<nbtriangles;i++)
+		for (int j=0; j <3; j++)
+		cout << i << " " << j << " ThL[i][j] = " << ThL[i][j] << "  x = "<< ThL[i][j].x  << " , y= "<< ThL[i][j].y << ",  label=" << ThL[i][j].label << endl;
+	}
+	//savemesh(ThL, "Paraview_5aa/mesh_ThL.msh");
+	
+  // FINITE ELEMENT SPACES:
+  // fluid:
+  //fespace VFh(ThF,[P2,P2,P1]);
+  fespace VFh(ThF,[P2,P2]);
+  fespace Qhpf(ThF,P1);
+  //fespace VFh(ThF,[P1b,P1b,P1]);
+  // structure:
+  fespace VM1h(ThS1,RT1);
+  fespace Qhpp(ThS1,P1dc);
+  //fespace VM1h(ThS1,RT2);
+  //fespace Qhpp(ThS1,P2dc);
+  //fespace VM1h(ThS1,RT0);
+  //fespace Qhpp(ThS1,P0);
+  // displacement
+  //fespace VS1h(ThS1,[P2,P2]);
+  fespace VS1h(ThS1,[P2,P2]);
+  //fespace VS1h(ThS1,P1);
+
+  // lagrange:
+	fespace LLhvector(ThL, [P2,P2]);
+  fespace LLh(ThL, P2);
+
+  // -- add on --
+  fespace LLh0(ThL, P0); 
+
+  VFh [uFx,uFy], [uF1oldx,uF1oldy];
+  Qhpf pF;
+  VM1h [uP1x,uP1y];
+
+  Qhpp pP1,pP1old;
+  VS1h [eta1x,eta1y], [eta1oldx,eta1oldy],[deta1oldx,deta1oldy];
+
+  LLhvector [mu1,mu2],[mun1,mut1],[lambdan,lambdat],[munD,mutD],[lambdanD,lambdatD],[lambda1,lambda2];
+  LLh  muntrue, muttrue, muntrue1, muttrue1, muntrueD, muttrueD,  lambdanDt, lambdatDt,lambdant,lambdatt;
+
+  // -- add on --
+  LLh0 mun0, mut0, munD2, munD3, munD4, mutD2, mutD3, mutD4, lambdan0, lambdat0, lambdanD0, lambdatD0, muntrue0, muttrue0, muntrueD2, muntrueD3, muntrueD4, muttrueD2, muttrueD3, muttrueD4;
+	
+	//DATA:
+  // Brinkman:
+  func rhoF=1.0;
+  real muF = 1.0;
+	
+  // Darcy:
+  real alfa=1.0;
+  real alfabjs=1.0;
+  real s0=1.0;
+  real k1 = 1.0; // matrix K=[[k1,k2],[k2,k3]]
+  real k2 = 0.0;
+  real k3 = 1.0;
+  real kappaxx=muF/k1;
+  real kappayy=muF/k3;
+  
+  real gammaf=1.0; //gammaf=0.001, 0.01, 0.1, 1, 10, 100 for Robustness to the Robin parameter study
+  real gammap=1.0; //gammap=0.001, 0.01, 0.1, 1, 10, 100 for Robustness to the Robin parameter study
+  real gamma=1.0;  //gamma=0.001, 0.01, 0.1, 1, 10, 100 for Robustness to the Robin parameter study
+  real muP = 1.0;
+  real lamp = 1.0;
+  real alphap = 1.0;
+  real mup = 1.0;
+  func rhoP = 1.0;
+
+  // BJS:
+  real bjs=alfabjs*muF*sqrt(2)/sqrt(k1);
+  // Gamma BJS:
+  //real gammabjs=1/(muF*alfabjs);
+  real gammabjs=0.0;
+    
+  func uf1 = pi*cos(pi*t)*(-3*x+cos(y));
+  func uf2 = pi*cos(pi*t)*(y+1);
+
+  func uf1t = -(pi^2)*sin(pi*t)*(-3*x+cos(y));
+  func uf2t = -(pi^2)*sin(pi*t)*(y+1);
+
+  func uf1x = -(3*pi)*cos(pi*t);
+  func uf1y = -pi*cos(pi*t)*sin(y);
+  func uf2x = 0.0;
+  func uf2y = pi*cos(pi*t);
+  func uf1xx =  0.0;
+  func uf1xy =  0.0;
+  func uf1yy = -pi*cos(pi*t)*cos(y);
+  func uf2xx =  0.0;
+  func uf2xy =  0.0;
+  func uf2yy =  0.0;
+
+  func pp  =  exp(t)*sin(pi*x)*cos((pi/2.)*y);
+  func ppx =  pi*exp(t)*cos(pi*x)*cos((pi/2.)*y);
+  func ppy = -(pi/2.)*exp(t)*sin(pi*x)*sin((pi/2.)*y);
+  func ppt =  exp(t)*sin(pi*x)*cos((pi/2.)*y);
+
+  func pf  =  exp(t)*sin(pi*x)*cos((pi/2.)*y)+ 2*pi*cos(pi*t);
+  func pfx =  pi*exp(t)*cos(pi*x)*cos((pi/2.)*y);
+  func pfy = -(pi/2.)*exp(t)*sin(pi*x)*sin((pi/2.)*y);
+    
+  func up1  = -(k1*ppx)/muF;
+  func up2  = -(k3*ppy)/muF;
+  func up1x =  ((k1*pi^2)/muF)*exp(t)*sin(pi*x)*cos((pi/2.)*y);
+  func up2y =  ((k3*pi^2)/(4.*muF))*exp(t)*sin(pi*x)*cos((pi/2.)*y);
+	
+  func etap1   =  sin(pi*t)*(-3*x + cos(y));
+  func etap2   =  sin(pi*t)*(y + 1.);
+  func etap1x  = -3.*sin(pi*t);
+  func etap1y  = -sin(pi*t)*sin(y);
+  func etap2x  =  0.;
+  func etap2y  =  sin(pi*t);
+  func etap1xx =  0.;
+  func etap1xy =  0.;
+  func etap1yy = -sin(pi*t)*cos(y);
+  func etap2xx =  0.;
+  func etap2xy =  0.;
+  func etap2yy =  0.;
+  func detap1  =  pi*cos(pi*t)*(-3*x + cos(y));
+  func detap2  =  pi*cos(pi*t)*(y + 1.);
+  func deta2p1 = -pi^2*sin(pi*t)*(-3*x + cos(y));
+  func deta2p2 = -pi^2*sin(pi*t)*(y + 1.);
+  //func ff1 = pi*cos(pi*t)*cos(y) + pi*exp(t)*cos(pi*x)*cos((pi*y)/2) + rhoF*uf1t;
+  //func ff2 = -(pi*exp(t)*sin(pi*x)*sin((pi*y)/2))/2 + rhoF*uf2t;
+  func ff1 = -2.*muF*uf1xx + pfx - muF*(uf1yy + uf2xy) + rhoF*uf1t;
+  func ff2 = -muF*(uf1xy + uf2xx) - 2.*muF*uf2yy + pfy + rhoF*uf2t;
+  
+  func qf = uf1x + uf2y;
+  
+  func fp1 = -((lamp+2.*mup)*etap1xx + (lamp+mup)*etap2xy + mup*etap1yy) + alphap*ppx + rhoP*deta2p1;
+  func fp2 = -((lamp+2.*mup)*etap2yy + (lamp+mup)*etap1xy + mup*etap2xx) + alphap*ppy + rhoP*deta2p2;
+  
+  func divetapt = -(2.*pi)*cos(pi*t);
+  func divup = up1x + up2y;
+  func qp  = s0*ppt + alphap*divetapt + divup;
+
+  func sigf1 = 2.*muF*uf1x - pf;
+  func sigf2 = muF*(uf1y + uf2x);
+  func sigf3 = muF*(uf1y + uf2x);
+  func sigf4 = 2.*muF*uf2y - pf;
+
+  func sigp1 = (lamp+2.0*muP)*etap1x + lamp*etap2y - alphap*pp;
+  func sigp2 = muP*(etap1y + etap2x);
+  func sigp3 = muP*(etap1y + etap2x);
+  func sigp4 = lamp*etap1x + (lamp+2.0*muP)*etap2y - alphap*pp;
+
+   
+  //----- Global macros
+  macro uf [uf1,uf2] //
+  macro up [up1,up2] //
+  macro eta1 [eta1x,eta1y] //
+  macro etap [etap1,etap2] //
+  macro eta1old [eta1oldx,eta1oldy] //
+  //macro detap [detap1,detap2] //
+  macro sigf [sigf1,sigf2,sigf3,sigf4] //
+  //macro sigF [sigF1,sigF2,sigF3,sigF4] //
+  macro sigFold [sigFold1,sigFold2,sigFold3,sigFold4] //
+  macro sigp [sigp1,sigp2,sigp3,sigp4] //
+  macro sigP [sigP1,sigP2,sigP3,sigP4] //
+  macro sigPold [sigPold1,sigPold2,sigPold3,sigPold4] //
+  macro Ff [ff1,ff2] //
+  macro Fp [fp1,fp2] //
+  //macro uP1old [uP1oldx,uP1oldy] //
+  macro uFold [uFoldx,uFoldy]//
+  macro norm1 [N.x,N.y] //
+  macro norm2 [-N.x,-N.y] //
+  macro tgt1 [Tfx,Tfy] //
+  macro tgt2 [Tpx,Tpy] //
+  macro vF [vFx,vFy] //
+  macro uF [uFx,uFy] //
+  macro uP1 [uP1x,uP1y] //
+  macro vP1 [vP1x,vP1y] //
+  macro zi1 [zi1x,zi1y] //
+  macro deta1 [deta1x,deta1y] //
+  macro deta1old [deta1oldx,deta1oldy] //
+  macro mu [mu1,mu2] //
+  macro mutrue [mutrue1,mutrue2] //
+  macro lambda [lambdan,lambdat] //
+  macro chi [chi1,chi2] //
+
+  real epsI = 1.e-12;
+  
+  error1[count] = 0;
+  error2[count] = 0;
+  error3[count] = 0;
+  error4[count] = 0;
+  error5[count] = 0;
+  error6[count] = 0;
+  error7[count] = 0;
+
+  varf a11([uFx,uFy],[vFx,vFy])= 
+  int2d(ThF)((rhoF/delt)*cdot(uFx,uFy,vFx,vFy)) +int2d(ThF)( 2.0*muF*( dx(uFx)*dx(vFx) + dy(uFy)*dy(vFy) ) 
+  + muF*( (dy(uFx)+dx(uFy))*dy(vFx) + (dy(uFx)+dx(uFy))*dx(vFy) ))
+  + int1d(ThF,1)(gamma*(uFx*vFx + uFy*vFy))
+  +on(3, uFx=uf1,uFy=uf2);
+  
+  varf a12([pF],[vFx,vFy])= -int2d(ThF)( pF*div(vFx,vFy));
+
+  varf a16([mu1,mu2],[vFx,vFy])= -int1d(ThF,1)(cdot(mu1,mu2,vFx,vFy));
+
+  varf a21([uFx,uFy],[wF])= int2d(ThF)( wF*div(uFx,uFy));
+
+  varf a22(pF,wF)= int2d(ThF)((epsI*pF*wF));
+
+  varf a31([uFx,uFy],[zi1x,zi1y])= int1d(ThS1,3)(2*gamma*cdot(uFx,uFy,-N.x,-N.y)*cdot(zi1x,zi1y,N.x,N.y))
+  +int1d(ThS1,3)(2*gamma*cdot(uFx,uFy,N.y,-N.x)*cdot(zi1x,zi1y,-N.y,N.x));
+
+  varf a33([eta1x,eta1y],[zi1x,zi1y])= int2d(ThS1)((rhoP/(delt)^2)*cdot(eta1x,eta1y,zi1x,zi1y))
+  +int2d(ThS1)(2.0*muP*(dx(zi1x)*dx(eta1x)+dy(zi1y)*dy(eta1y))) 
+  +int2d(ThS1)(muP*(dx(zi1y)*dx(eta1y)+dy(zi1x)*dx(eta1y)+dx(zi1y)*dy(eta1x)+dy(zi1x)*dy(eta1x)))	
+  +int2d(ThS1)((lamp)*(dx(zi1x)*dx(eta1x)+dy(zi1y)*dx(eta1x)+dx(zi1x)*dy(eta1y)+dy(zi1y)*dy(eta1y)))
+  +int1d(ThS1,3)((gamma/delt)*cdot(eta1x,eta1y,N.x,N.y)*cdot(zi1x,zi1y,N.x,N.y))
+  +int1d(ThS1,3)((gamma/delt)*cdot(eta1x,eta1y,-N.y,N.x)*cdot(zi1x,zi1y,-N.y,N.x))
+  +on(1, eta1x=etap1, eta1y=etap2);
+
+  varf a34([uP1x,uP1y],[zi1x,zi1y])= int1d(ThS1,3)(gamma*cdot(uP1x,uP1y,N.x,N.y)*cdot(zi1x,zi1y,N.x,N.y));
+
+  varf a35([pP1],[zi1x,zi1y])= -int2d(ThS1)(alfa*pP1*div(zi1x,zi1y));
+
+  varf a36([mu1,mu2],[zi1x,zi1y])= -int1d(ThS1,3)(cdot(mu1,mu2,-N.x,-N.y)*cdot(zi1x,zi1y,N.x,N.y))-int1d(ThS1,3)(cdot(mu1,mu2,N.y,-N.x)*cdot(zi1x,zi1y,-N.y,N.x));
+
+  varf a41([uFx,uFy],[vP1x,vP1y])= int1d(ThS1,3)(2*gamma*cdot(uFx,uFy,-N.x,-N.y)*cdot(vP1x,vP1y,N.x,N.y));
+
+  varf a43([eta1x,eta1y],[vP1x,vP1y])= int1d(ThS1,3)((gamma/delt)*cdot(eta1x,eta1y,N.x,N.y)*cdot(vP1x,vP1y,N.x,N.y));
+
+  varf a44([uP1x,uP1y],[vP1x,vP1y])= int2d(ThS1)(cdot(kappaxx*uP1x,kappayy*uP1y,vP1x,vP1y))
+  +int1d(ThS1,3)(gamma*cdot(uP1x,uP1y,N.x,N.y)*cdot(vP1x,vP1y,N.x,N.y))
+  +on(1, uP1x=up1, uP1y=up2);
+
+  varf a45([pP1],[vP1x,vP1y])= -int2d(ThS1)(1*pP1*div(vP1x,vP1y));
+
+  varf a46([mu1,mu2],[vP1x,vP1y])= -int1d(ThS1,3)(cdot(mu1,mu2,-N.x,-N.y)*cdot(vP1x,vP1y,N.x,N.y));
+
+  varf a53([eta1x,eta1y],[wP1])= int2d(ThS1)((alfa/delt)*wP1*div(eta1x,eta1y));
+
+  varf a54([uP1x,uP1y],[wP1])= int2d(ThS1)(wP1*div(uP1x,uP1y));
+  
+  varf a55(pP1,wP1)= int2d(ThS1)((s0/delt)*(wP1*pP1)) +int2d(ThS1)(epsI*(pP1*wP1));
+   
+  varf a61([uFx,uFy],[chi1,chi2])= int1d(ThL,1)(cdot(uFx,uFy,chi1,chi2));
+
+  varf a63([eta1x,eta1y],[chi1,chi2])= int1d(ThL,1)((1.0/delt)*cdot(eta1x,eta1y,-N.x,-N.y)*cdot(chi1,chi2,N.x,N.y)) 
+  + int1d(ThL,1)((1.0/delt)*cdot(eta1x,eta1y,N.y,-N.x)*cdot(chi1,chi2,-N.y,N.x));
+
+  varf a64([uP1x,uP1y],[chi1,chi2])= int1d(ThL,1)(cdot(uP1x,uP1y,-N.x,-N.y)*cdot(chi1,chi2,N.x,N.y));
+
+  varf a66([mu1,mu2],[chi1,chi2])= intalledges(ThL)(1.e-13*cdot(mu1,mu2,chi1,chi2)); 
+
+  //-----	RHS
+  varf rhs1([uFx,uFy],[vFx,vFy])=int2d(ThF)((rhoF/delt)*cdot(uF1oldx,uF1oldy,vFx,vFy))+int2d(ThF)(ff1*vFx + ff2*vFy)
+      +int1d(ThF,2)(cdot((sigf1*N.x + sigf2*N.y),(sigf3*N.x + sigf4*N.y),vFx,vFy))
+      +int1d(ThF,4)(cdot((sigf1*N.x + sigf2*N.y),(sigf3*N.x + sigf4*N.y),vFx,vFy))
+      +on(3, uFx=uf1,uFy=uf2);
+  
+  varf rhs2(pF,wF)=int2d(ThF)(qf*wF);
+
+  varf rhs3([eta1x,eta1y],[zi1x,zi1y])=int2d(ThS1)(fp1*zi1x + fp2*zi1y) + int2d(ThS1)((rhoP/(delt)^2)*cdot(eta1oldx,eta1oldy,zi1x,zi1y))
+      +int2d(ThS1)((rhoP/delt)*cdot(deta1oldx,deta1oldy,zi1x,zi1y))
+      +int1d(ThS1,3)((gamma/delt)*cdot(eta1oldx,eta1oldy,N.x,N.y)*cdot(zi1x,zi1y,N.x,N.y))
+      +int1d(ThS1,3)((gamma/delt)*cdot(eta1oldx,eta1oldy,-N.y,N.x)*cdot(zi1x,zi1y,-N.y,N.x))
+      +int1d(ThS1,2)(cdot((sigp1*N.x + sigp2*N.y),(sigp3*N.x + sigp4*N.y),zi1x,zi1y))
+      +int1d(ThS1,4)(cdot((sigp1*N.x + sigp2*N.y),(sigp3*N.x + sigp4*N.y),zi1x,zi1y))
+      +on(1, eta1x=etap1, eta1y=etap2);
+  
+  varf rhs4([uP1x,uP1y],[vP1x,vP1y])= int1d(ThS1,3)((gamma/delt)*cdot(eta1oldx,eta1oldy,N.x,N.y)*cdot(vP1x,vP1y,N.x,N.y))
+       +on(1, uP1x=up1, uP1y=up2);
+
+  varf rhs5(pP1,wP1)= int2d(ThS1)(qp*wP1) + int2d(ThS1)((s0/delt)*(wP1*pP1old)) + int2d(ThS1)((alfa/delt)*wP1*div(eta1oldx,eta1oldy));
+
+  varf rhs6([mu1,mu2],[chi1,chi2])= int1d(ThL,1)((1.0/delt)*cdot(eta1oldx,eta1oldy,-N.x,-N.y)*cdot(chi1,chi2,N.x,N.y))
+        + int1d(ThL,1)((1.0/delt)*cdot(eta1oldx,eta1oldy,N.y,-N.x)*cdot(chi1,chi2,-N.y,N.x)) ;
+
+
+  //---------------------------------------------------------------------------------
+  // 			      					Stiff matrix
+  //---------------------------------------------------------------------------------
+
+  matrix A11 = a11(VFh,VFh);
+  matrix A12 = a12(Qhpf,VFh);
+  matrix A16 = a16(LLhvector,VFh);
+
+  matrix A21 = a21(VFh,Qhpf);
+  matrix A22 = a22(Qhpf,Qhpf);
+
+  matrix A31 = a31(VFh,VS1h);
+  matrix A33 = a33(VS1h,VS1h);
+  matrix A34 = a34(VM1h,VS1h);
+  matrix A35 = a35(Qhpp,VS1h);
+  matrix A36 = a36(LLhvector,VS1h);
+
+  matrix A41 = a41(VFh,VM1h);
+  matrix A43 = a43(VS1h,VM1h);
+  matrix A44 = a44(VM1h,VM1h);
+  matrix A45 = a45(Qhpp,VM1h);
+  matrix A46 = a46(LLhvector,VM1h);
+
+  matrix A53 = a53(VS1h,Qhpp);
+  matrix A54 = a54(VM1h,Qhpp);
+  matrix A55 = a55(Qhpp,Qhpp);
+
+  matrix A61 = a61(VFh,LLhvector);
+  matrix A63 = a63(VS1h,LLhvector);
+  matrix A64 = a64(VM1h,LLhvector);
+  matrix A66 = a66(LLhvector,LLhvector);
+
+  //----- Initial condition
+  t = 0.0;
+  //FOR STOKES RHS:- (We need to assign values to old functions/ functions at n-th timestep, so we assign them true values at t=0.0)
+  [uF1oldx,uF1oldy] = [uf1,uf2];
+  
+  //FOR BIOT RHS:-
+  pP1old = pp;
+  [eta1oldx,eta1oldy] = [etap1,etap2];
+  //eta1oldx = etap1;//1ST COMPONENT OF VECTOR
+  //eta1oldy = etap2;//2ND COMPONENT OF VECTOR
+  [deta1oldx,deta1oldy] = [detap1,detap2];
+  //deta1oldx = detap1;//1ST COMPONENT OF VECTOR
+  //deta1oldy = detap2;//2ND COMPONENT OF VECTOR
+
+  real[int] sol1(VFh.ndof);
+  real[int] sol2(Qhpf.ndof);
+  real[int] sol3(VS1h.ndof); 
+  real[int] sol4(VM1h.ndof);
+  real[int] sol5(Qhpp.ndof);
+  real[int] sol6(LLhvector.ndof);
+
+  func mutrue1= gamma*uf1+ sigf1*N.x +sigf2*N.y;
+  func mutrue2 = gamma*uf2 + sigf3*N.x +sigf4*N.y;
+
+  for (int k=1;k<=NN;++k){
+	
+	  t=t+delt;
+    
+    //----- RHS data change in time
+    real[int] RHS1 = rhs1(0,VFh);
+    real[int] RHS2 = rhs2(0,Qhpf);
+    real[int] RHS3 = rhs3(0,VS1h);
+    real[int] RHS4 = rhs4(0,VM1h);
+    real[int] RHS5 = rhs5(0,Qhpp);
+    real[int] RHS6 = rhs6(0,LLhvector); 
+    
+
+    real[int] L = [RHS1,RHS2,RHS3,RHS4,RHS5,RHS6];
+
+    matrix M;{
+    M = [[  A11,     A12,    0,    0,   0,   A16],
+         [  A21,    A22,    0,    0,   0,     0],
+         [  A31,       0,  A33,  A34, A35,   A36],
+         [  A41,       0,  A43,  A44, A45,   A46],
+         [    0,       0,  A53,  A54, A55,     0],
+         [  A61,       0,  A63,  A64,   0,  A66]];}
+  
+    set(M,solver = sparsesolver);
+    real[int] sol = M^-1*L;
+
+    //----- Approximation of the solution
+    [sol1,sol2,sol3,sol4,sol5,sol6] = sol;
+
+    uFx[]   = sol1;
+    pF[]    = sol2;
+    eta1x[] = sol3;
+    uP1x[]  = sol4;
+    pP1[]   = sol5;
+    mu1[]   = sol6;
+
+
+    //ERRORS FOR STOKES FORMULATION
+    //L2 error for pressure
+    error1[count] +=  int2d(ThF) ((pF-pf)^2) ;
+    
+    //H1 error for velocity
+    error2tmp[k-1] = sqrt(int2d(ThF) ((uFx-uf1)^2) + int2d(ThF) ((uFy-uf2)^2) + int2d(ThF) ((dx(uFx)-uf1x)^2)+ int2d(ThF) ((dy(uFx)-uf1y)^2)+ int2d(ThF) ((dx(uFy)-uf2x)^2) + int2d(ThF) ((dy(uFy)-uf2y)^2));
+    
+    
+    //ERRORS FOR BIOT FORMULATION
+    //L2 ERROR FOR DARCY PRESSURE
+    error3tmp[k-1] =  sqrt(int2d(ThS1) ((pP1-pp)^2)) ;
+    //HDIV ERROR FOR DARCY VELOCITY
+    error4[count] +=  int2d(ThS1) ( (uP1x - up1)^2 + (uP1y - up2)^2 + (divup - div(uP1x,uP1y))^2); 
+    // H1 ERROR FOR DISPLACEMENT
+    error5tmp[k-1] =  sqrt(int2d(ThS1) ( (eta1x-etap1)^2 + (eta1y-etap2)^2 + (dx(eta1x) - etap1x)^2 + (dy(eta1y) - etap2y)^2 + (dx(eta1y) - etap2x)^2 + (dy(eta1x) - etap1y)^2 ));
+    
+
+    //CALCULATING DETA1OLD BECAUSE THIS IS USED WHILE CALCULATING MU_N AND MU_TAU, ALSO IT UPDATES DETA1OLD USED IN BIOT FORMULATION USED IN NEXT STEP
+    //deta1old = (eta1-eta1old)/delt;
+    deta1oldx[] = (1./delt)*eta1x[] - (1./delt)*eta1oldx[];
+    //deta1oldx = (eta1x-eta1oldx)/delt;//1ST COMPONENT OF THE VECTOR
+    //deta1oldy = (eta1y-eta1oldy)/delt;//2ND COMPONENT OF THE VECTOR
+
+    // L2 ERROR FOR DISPLACEMENT DERIVATIVE
+    error6tmp[k-1] = sqrt(int2d(ThS1) ((deta1oldx-detap1)^2+(deta1oldy-detap2)^2));
+
+    //L2 ERRORS FOR MU_N AND MU_TAU
+    error7tmp[k-1] =  sqrt(int1d(ThL,1) ((mu1-mutrue1)^2 + (mu2-mutrue2)^2));
+
+    cout << " error for mu on interface= " << error7tmp[k-1]<< " for  t = "<< t<< " and n = "<< n <<endl;
+    
+    //UPDATE ETA1OLD AND PP1OLD FOR RHS OF BIOT SYSTEM
+    [eta1oldx,eta1oldy] = [eta1x,eta1y];
+    //eta1oldx = eta1x;// 1st COMPONENT OF VECTOR
+    //eta1oldy = eta1y;// 2nd COMPONENT OF VECTOR
+    pP1old = pP1;
+    //UPDATE UFOLD FOR RHS OF STOKES SYSTEM
+    [uF1oldx,uF1oldy]  = [uFx,uFy];// uF1old = [uF1oldx,uF1oldy] 
+
+
+  }//time loop ends over here.
+
+  //savevtk("Paraview_5aa/mun1.vtk",ThL,mun0,muntrue0, dataname="mun muntrue");
+  //savevtk("Paraview_5aa/mut1.vtk",ThL,mut0,muttrue0, dataname="mut muttrue");
+
+// Taking L-infty norm in time 
+error2[count] = error2tmp.max;//STOKES VELOCITY L-INFINITY IN TIME
+error3[count] = error3tmp.max;//DARCY PRESSURE L-INFINITY IN TIME
+error5[count] = error5tmp.max;// DISPLACEMENT L-INFINITY IN TIME
+error6[count] = error6tmp.max;// DISPLACEMENT DERIVATIVE L-INFINITY IN TIME
+error7[count] = error7tmp.max;// MU L-INFINITY IN TIME
+
+
+count+=1;
+}//domain mesh loop ends over here.
+
+real[int] err1(number);
+real[int] err2(number);
+real[int] err3(number);
+real[int] err4(number);
+real[int] err5(number);
+real[int] err6(number);
+real[int] err7(number);
+
+
+for(int n=0; n<error1.n; n++){
+  //Fluid pressure L2 in space L2 in time
+  err1(n) = sqrt(delt*error1(n));
+ 
+  // Fluid velocity H1 in space Linfinity in time
+  err2(n) = error2(n);
+  
+  // Darcy pressure L2 in space Linfinity in time
+  err3(n) = error3(n);
+
+  // Darcy velocity L2 in space L2 in time
+  err4(n) = sqrt(delt*error4(n));
+  
+  // Displacement H1 in space Linfinity in time
+  err5(n) = error5(n);
+  
+  // Displacement Derivative L2 in space Linfinity in time
+  err6(n) = error6(n);
+  
+  // MU L2 in space Linfinity in time
+  err7(n) = error7(n);
+
+  if (n == 0)
+  {
+    rate1(n) = 0.0;
+   
+    rate2(n) = 0.0;
+
+    rate3(n) = 0.0;
+
+    rate4(n) = 0.0;
+
+    rate5(n) = 0.0;
+
+    rate6(n) = 0.0;
+
+    rate7(n) = 0.0;
+
+    
+  } 
+  else 
+  {
+    rate1(n) = log(err1(n-1)/err1(n))/log(2.0);
+
+    rate2(n) = log(err2(n-1)/err2(n))/log(2.0);
+
+    rate3(n) = log(err3(n-1)/err3(n))/log(2.0);
+
+    rate4(n) = log(err4(n-1)/err4(n))/log(2.0);
+
+    rate5(n) = log(err5(n-1)/err5(n))/log(2.0);
+
+    rate6(n) = log(err6(n-1)/err6(n))/log(2.0);
+
+    rate7(n) = log(err7(n-1)/err7(n))/log(2.0);
+
+
+  }
+
+
+}
+
+
+// Print results
+cout << "============================================================================================================================================================================================================================" << endl;
+cout << "Errors and rates" << endl;
+cout << "||pf-pF||_(L2)" << "    rate     "
+     << "||uf-uF||_(H1)" << " rate"
+     << "   ||pp-pP||_(L2)   " << " rate   "
+     << "||up-uP||_(L2)" << " rate "
+     << "||etap-eta1||_(H1)" << "    rate  "
+     << "||detap-deta1||_(L2)" << "    rate  "
+     << "||mutrue-mu||_(L2)" << " rate  "
+   << endl;
+   for (int i=0; i<err1.n; i++){
+  // L2 STOKES pressure
+  cout.precision(3);
+  cout.scientific << err1[i] << "         ";
+  cout.precision(1);  
+  cout.fixed << rate1[i] << "     ";
+  // H1  STOKES velocity
+  cout.precision(3);
+  cout.scientific << err2[i] << "      ";
+  cout.precision(1);  
+  cout.fixed << rate2[i] << "    ";
+  // L2 DARCY pressure
+  cout.precision(3);
+  cout.scientific << err3[i] << "     ";
+  cout.precision(1);  
+  cout.fixed << rate3[i] << "      ";
+  // L2  DARCY velocity
+  cout.precision(3);
+  cout.scientific << err4[i] << "     ";
+  cout.precision(1);  
+  cout.fixed << rate4[i] << "       ";
+  // H1  DISPLACEMENT
+  cout.precision(3);
+  cout.scientific << err5[i] << "         ";
+  cout.precision(1);  
+  cout.fixed << rate5[i] << "     ";
+  // L2  DISPLACEMENT DERIVATIVE
+  cout.precision(3);
+  cout.scientific << err6[i] << "         ";
+  cout.precision(1);  
+  cout.fixed << rate6[i] << "  ";
+  // L2  MUN
+  cout.precision(3);
+  cout.scientific << err7[i] << "        ";
+  cout.precision(1);  
+  cout.fixed << rate7[i] << "         ";
+  cout << endl;
+}
+
+cout << "=============================================================================================================================================================================================================================" << endl;
+
+
+
+
+
+
+
+
