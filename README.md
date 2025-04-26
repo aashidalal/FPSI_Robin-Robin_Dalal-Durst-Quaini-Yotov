@@ -1,4 +1,5 @@
 A Robin-Robin splitting method for the Stokes-Biot fluid-poroelastic structure interaction model, authored by: Aashi Dalal, Rebecca Durst, Annalisa Quaini, Ivan Yotov.
+
 Abstract:  We develop and analyze a splitting method for fluid-poroelastic structure interaction. The fluid
  is described using the Stokes equations and the poroelastic structure is described using the Biot
  equations. The transmission conditions on the interface are mass conservation, balance of stresses,
