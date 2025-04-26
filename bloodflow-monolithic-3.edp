@@ -1,0 +1,468 @@
+load "Element_Mixte"
+load "medit"
+load "Element_P3"
+load "iovtk"
+
+//load "UMFPACK64" 
+
+// MACRO:
+macro div(ax,ay) (dx(ax)+dy(ay))//
+macro sigmaEnx(ax,ay) (muS*(2.0*dx(ax)*N.x + (dx(ay)+dy(ax))*N.y) + lambdaS*(div(ax,ay))*N.x)//
+macro sigmaEny(ax,ay) (muS*(2.0*dy(ay)*N.y + (dx(ay)+dy(ax))*N.x) + lambdaS*(div(ax,ay))*N.y)//
+macro sigmaFnx(ax,ay) (muF*(dx(ax)*N.x + dy(ax)*N.y))//
+macro sigmaFny(ax,ay) (muF*(dy(ay)*N.y + dx(ay)*N.x))//
+macro sigmasymFnx(ax,ay) (ci*muF*(dx(ax)*N.x + dy(ax)*N.y))//
+macro sigmasymFny(ax,ay) (ci*muF*(dy(ay)*N.y + dx(ay)*N.x))//
+macro cdot(ax,ay,bx,by) (ax*bx+ay*by)//
+macro tgx(ax,ay) (ax-cdot(ax,ay,N.x,N.y)*N.x)//
+macro tgy(ax,ay) (ay-cdot(ax,ay,N.x,N.y)*N.y)//
+
+
+
+int Tfx = -N.y;
+int Tfy = N.x;
+int Tpx = N.y;
+int Tpy = -N.x;
+int Npx = -N.x;
+int Npy = -N.y;
+
+// time:
+real t=0.0;
+real T=0.021;
+real delt=0.0001;
+func NN=T/delt;
+//real tol1,tol2, t;
+ 
+// FLAGS:
+bool debug=false;	   // true for debuging, mesh plots etc.
+bool plotflag=0;   // true for making .vtk files
+bool converg=false;	   // true for convergence test     (output made in reverse order, from finer mesh to coarser)
+bool intresid=1;   // true for interface residual	(output made in reverse order, from finer mesh to coarser)
+int timedep=0;
+
+int m,n,l;
+
+if(converg){
+	m = 160;
+	l = 10;
+} else {
+	m=90;
+	l=m;
+}
+	
+
+int number = log(real(m/l))/log(2.0) + 1; //NUMBER OF MESH REFINEMENTS
+cout << "Number of mesh refinements: " << number << endl;
+
+int[int] labels = [1,2,3,4];
+
+// h-TEST LOOP:
+for(int n=m;n>=l;n/=2){
+	
+	t=0;
+	
+	mesh ThS1=square(n,n/3,[6*x,y/10-0.6],label=labels);
+	mesh ThF=square(n,n/6,[6*x,y/2-0.5],label=labels);
+
+
+	mesh ThL = emptymesh(ThF);
+  mesh ThP = emptymesh(ThS1);
+  
+	
+	if(debug){
+		plot(ThF,ThS1, wait=true);
+    plot(ThL,ThS1, wait=true);
+		
+	
+		int nbtriangles=ThL.nt;
+		for (int i=0;i<nbtriangles;i++)
+		for (int j=0; j <3; j++)
+		cout << i << " " << j << " ThL[i][j] = " << ThL[i][j] << "  x = "<< ThL[i][j].x  << " , y= "<< ThL[i][j].y << ",  label=" << ThL[i][j].label << endl;
+	}
+	savemesh(ThL, "Paraview_bloodflow79/mesh_ThL.msh");
+  savemesh(ThP, "Paraview_bloodflow79/mesh_ThP.msh");
+	
+  // FINITE ELEMENT SPACES:
+  // fluid:
+  //fespace VFh(ThF,[P2,P2,P1]);
+  fespace VFh(ThF,[P2,P2]);
+  fespace Qhpf(ThF,P1);
+  //fespace VFh(ThF,[P1b,P1b,P1]);
+  // structure:
+  fespace VM1h(ThS1,RT1);
+  fespace Qhpp(ThS1,P1dc);
+  //fespace VM1h(ThS1,RT2);
+  //fespace Qhpp(ThS1,P2dc);
+  //fespace VM1h(ThS1,RT0);
+  //fespace Qhpp(ThS1,P0);
+  // displacement
+  //fespace VS1h(ThS1,[P2,P2]);
+  fespace VS1h(ThS1,[P2,P2]);
+  //fespace VS1h(ThS1,P1);
+
+  // lagrange:
+	fespace LLhvector(ThL, [P2,P2]);
+  fespace LLh(ThL, P2);
+
+  // -- add on --
+  fespace LLh0(ThL, P0); 
+
+  //addon
+  fespace Qhpf0(ThL,P0);
+  fespace Qhpp0(ThP,P0);
+  fespace VFh0(ThL,P0);
+  fespace VM1h0(ThP,P0);
+  fespace VS1h0(ThP,P0);
+
+  //VFh [uFx,uFy], [vFx,vFy], [uF1oldx,uF1oldy];
+  //Qhpf pF,wF;
+  //VM1h [uP1x,uP1y], [vP1x,vP1y];
+
+  //Qhpp pP1,wP1,pP1old;
+  //VS1h [eta1x,eta1y], [zi1x,zi1y], [eta1oldx,eta1oldy],[deta1oldx,deta1oldy];
+  
+  //LLh mun, mut, lambdan, lambdat, munold1, mutold1, muntrue, muttrue,chi1,chi2;
+
+  VFh [uFx,uFy], [uF1oldx,uF1oldy];
+  Qhpf pF;
+  VM1h [uP1x,uP1y];
+
+  Qhpp pP1,pP1old;
+  VS1h [eta1x,eta1y], [eta1oldx,eta1oldy],[deta1oldx,deta1oldy];
+
+  LLhvector [mu1,mu2],[muold1,muold2],[mun1,mut1],[munD,mutD],[lambdanD,lambdatD],[lambda1,lambda2];
+  LLh  munold, mutold, mun, mut, lambdan, lambdat, muntrue, muttrue, muntrue1, muttrue1, muntrueD, muttrueD,  lambdanDt, lambdatDt,lambdant,lambdatt;
+  // -- add on --
+  LLh0 mun0, mut0, munD2, munD3, munD4, mutD2, mutD3, mutD4, lambdan0, lambdat0, lambdanD0, lambdatD0, muntrue0, muttrue0, muntrueD2, muntrueD3, muntrueD4, muttrueD2, muttrueD3, muttrueD4;
+	
+  // -- add on --
+  Qhpf0 pfh0,wfh0;
+  Qhpp0 pph0,wph0;
+  VFh0 ufhn,ufht,vfhn,vfht;
+  VM1h0 uphn,upht,vphn,vpht;
+  VS1h0 etahn,zihn;
+
+
+	//DATA:
+  // Brinkman:
+  func rhoF=1.0;
+  real muF = 0.035; 	
+	
+  // Darcy:
+  real alfa=1.0;
+  real alfabjs=1.0;
+  real s0= 1e-3;
+  real k1 = 1e-6; // matrix K=[[k1,k2],[k2,k3]]
+  real k2 = 0.0;
+  real k3 = 1e-6;
+  real kappaxx=muF/k1;
+  real kappayy=muF/k3;
+  real gamma=1000.0;
+  //real gammap=1000.0;
+  real muP =  5.575e+5;
+  real lamp = 1.7e+6;
+  real mup =  5.575e+5;
+  func rhoP = 1.1;
+
+  // BJS:
+  real bjs= 1e+3;
+  // Gamma BJS:
+  real gammabjs=1/bjs;
+  //real gammabjs = 0.0;
+
+	real Pin = 0.0;
+	real beta = 4e+6;
+	int NNN = NN;
+    
+  func ff1 = 0.0;
+  func ff2 = 0.0;
+  func qf = 0.0;
+  func fp1 = 0.0;
+  func fp2 = 0.0;
+  func qp  = 0.0;
+   
+  //----- Global macros
+  macro uf [uf1,uf2] //
+  macro up [up1,up2] //
+  macro eta1 [eta1x,eta1y] //
+  macro etap [etap1,etap2] //
+  macro eta1old [eta1oldx,eta1oldy] //
+  //macro detap [detap1,detap2] //
+  macro sigf [sigf1,sigf2,sigf3,sigf4] //
+  //macro sigF [sigF1,sigF2,sigF3,sigF4] //
+  macro sigFold [sigFold1,sigFold2,sigFold3,sigFold4] //
+  macro sigp [sigp1,sigp2,sigp3,sigp4] //
+  macro sigP [sigP1,sigP2,sigP3,sigP4] //
+  macro sigPold [sigPold1,sigPold2,sigPold3,sigPold4] //
+  macro Ff [ff1,ff2] //
+  macro Fp [fp1,fp2] //
+  //macro uP1old [uP1oldx,uP1oldy] //
+  macro uFold [uFoldx,uFoldy]//
+  macro norm1 [N.x,N.y] //
+  macro norm2 [-N.x,-N.y] //
+  macro tgt1 [Tfx,Tfy] //
+  macro tgt2 [Tpx,Tpy] //
+  macro vF [vFx,vFy] //
+  macro uF [uFx,uFy] //
+  macro uP1 [uP1x,uP1y] //
+  macro vP1 [vP1x,vP1y] //
+  macro zi1 [zi1x,zi1y] //
+  macro deta1 [deta1x,deta1y] //
+  macro deta1old [deta1oldx,deta1oldy] //
+  macro mu [mu1,mu2] //
+  macro mutrue [mutrue1,mutrue2] //
+  macro lambda [lambdan,lambdat] //
+  macro chi [chi1,chi2] //
+
+  real epsI = 1.e-12;
+  include "Pfunctioncos.edp";
+
+  varf a11([uFx,uFy],[vFx,vFy])= 
+  int2d(ThF)((rhoF/delt)*cdot(uFx,uFy,vFx,vFy)) +int2d(ThF)( 2.0*muF*( dx(uFx)*dx(vFx) + dy(uFy)*dy(vFy) ) 
+  + muF*( (dy(uFx)+dx(uFy))*dy(vFx) + (dy(uFx)+dx(uFy))*dx(vFy) ))
+  + int1d(ThF,1)(gamma*(cdot(uFx,uFy,N.x,N.y)*cdot(vFx,vFy,N.x,N.y)))
+  +int1d(ThF,1)(gamma*cdot(uFx,uFy,-N.y,N.x)*cdot(vFx,vFy,-N.y,N.x))
+  +on(3,4,uFy=0);
+  
+  varf a12([pF],[vFx,vFy])= -int2d(ThF)( pF*div(vFx,vFy));
+
+  varf a16([mu1,mu2],[vFx,vFy])= -int1d(ThF,1)(cdot(mu1,mu2,N.x,N.y)*cdot(vFx,vFy,N.x,N.y)) -int1d(ThF,1)(cdot(mu1,mu2,-N.y,N.x)*cdot(vFx,vFy,-N.y,N.x));
+
+  varf a21([uFx,uFy],[wF])= int2d(ThF)( wF*div(uFx,uFy));
+
+  varf a22(pF,wF)= int2d(ThF)((epsI*pF*wF));
+
+  varf a31([uFx,uFy],[zi1x,zi1y])= int1d(ThS1,3)(2*gamma*cdot(uFx,uFy,-N.x,-N.y)*cdot(zi1x,zi1y,N.x,N.y))
+  +int1d(ThS1,3)(2*gamma*cdot(uFx,uFy,N.y,-N.x)*cdot(zi1x,zi1y,-N.y,N.x));
+
+  varf a33([eta1x,eta1y],[zi1x,zi1y])= int2d(ThS1)((rhoP/(delt)^2)*cdot(eta1x,eta1y,zi1x,zi1y))
+  +int2d(ThS1)(2.0*muP*(dx(zi1x)*dx(eta1x)+dy(zi1y)*dy(eta1y))) 
+  +int2d(ThS1)(muP*(dx(zi1y)*dx(eta1y)+dy(zi1x)*dx(eta1y)+dx(zi1y)*dy(eta1x)+dy(zi1x)*dy(eta1x)))	
+  +int2d(ThS1)((lamp)*(dx(zi1x)*dx(eta1x)+dy(zi1y)*dx(eta1x)+dx(zi1x)*dy(eta1y)+dy(zi1y)*dy(eta1y)))
+  +int2d(ThS1)(beta*cdot(eta1x,eta1y,zi1x,zi1y)) //spring term added
+  +int1d(ThS1,3)((gamma/delt)*cdot(eta1x,eta1y,N.x,N.y)*cdot(zi1x,zi1y,N.x,N.y))
+  +int1d(ThS1,3)((gamma/delt)*cdot(eta1x,eta1y,-N.y,N.x)*cdot(zi1x,zi1y,-N.y,N.x))
+  +on(2,4, eta1x=0, eta1y=0) +on(1,eta1x=0);
+
+  varf a34([uP1x,uP1y],[zi1x,zi1y])= int1d(ThS1,3)(gamma*cdot(uP1x,uP1y,N.x,N.y)*cdot(zi1x,zi1y,N.x,N.y));
+
+  varf a35([pP1],[zi1x,zi1y])= -int2d(ThS1)(alfa*pP1*div(zi1x,zi1y));
+
+  varf a36([mu1,mu2],[zi1x,zi1y])= -int1d(ThS1,3)(cdot(mu1,mu2,-N.x,-N.y)*cdot(zi1x,zi1y,N.x,N.y))-int1d(ThS1,3)(cdot(mu1,mu2,N.y,-N.x)*cdot(zi1x,zi1y,-N.y,N.x));
+
+  varf a41([uFx,uFy],[vP1x,vP1y])= int1d(ThS1,3)(2*gamma*cdot(uFx,uFy,-N.x,-N.y)*cdot(vP1x,vP1y,N.x,N.y));
+
+  varf a43([eta1x,eta1y],[vP1x,vP1y])= int1d(ThS1,3)((gamma/delt)*cdot(eta1x,eta1y,N.x,N.y)*cdot(vP1x,vP1y,N.x,N.y));
+
+  varf a44([uP1x,uP1y],[vP1x,vP1y])= int2d(ThS1)(cdot(kappaxx*uP1x,kappayy*uP1y,vP1x,vP1y))
+  +int1d(ThS1,3)(gamma*cdot(uP1x,uP1y,N.x,N.y)*cdot(vP1x,vP1y,N.x,N.y))
+  +on(2,4, uP1x=0, uP1y=0);
+
+  varf a45([pP1],[vP1x,vP1y])= -int2d(ThS1)(1*pP1*div(vP1x,vP1y));
+
+  varf a46([mu1,mu2],[vP1x,vP1y])= -int1d(ThS1,3)(cdot(mu1,mu2,-N.x,-N.y)*cdot(vP1x,vP1y,N.x,N.y));
+
+  varf a53([eta1x,eta1y],[wP1])= int2d(ThS1)((alfa/delt)*wP1*div(eta1x,eta1y));
+
+  varf a54([uP1x,uP1y],[wP1])= int2d(ThS1)(wP1*div(uP1x,uP1y));
+  
+  varf a55(pP1,wP1)= int2d(ThS1)((s0/delt)*(wP1*pP1)) +int2d(ThS1)(epsI*(pP1*wP1));
+   
+  varf a61([uFx,uFy],[chi1,chi2])= int1d(ThL,1)(cdot(uFx,uFy,N.x,N.y)*cdot(chi1,chi2,N.x,N.y))
+  +int1d(ThL,1)(cdot(uFx,uFy,-N.y,N.x)*cdot(chi1,chi2,-N.y,N.x));
+
+  varf a63([eta1x,eta1y],[chi1,chi2])= int1d(ThL,1)((1.0/delt)*cdot(eta1x,eta1y,-N.x,-N.y)*cdot(chi1,chi2,N.x,N.y)) 
+  + int1d(ThL,1)((1.0/delt)*cdot(eta1x,eta1y,N.y,-N.x)*cdot(chi1,chi2,-N.y,N.x));
+
+  varf a64([uP1x,uP1y],[chi1,chi2])= int1d(ThL,1)(cdot(uP1x,uP1y,-N.x,-N.y)*cdot(chi1,chi2,N.x,N.y));
+
+  varf a66([mu1,mu2],[chi1,chi2])= intalledges(ThL)(1.e-13*cdot(mu1,mu2,chi1,chi2)); 
+
+  //-----	RHS
+  varf rhs1([uFx,uFy],[vFx,vFy])=int2d(ThF)((rhoF/delt)*cdot(uF1oldx,uF1oldy,vFx,vFy))+int2d(ThF)(ff1*vFx + ff2*vFy)
+      -int1d(ThF,4)(Pin*cdot(vFx,vFy,N.x,N.y))+on(3,4,uFy=0);
+
+  varf rhs2(pF,wF)=int2d(ThF)(qf*wF);
+
+  varf rhs3([eta1x,eta1y],[zi1x,zi1y])=int2d(ThS1)(fp1*zi1x + fp2*zi1y) + int2d(ThS1)((rhoP/(delt)^2)*cdot(eta1oldx,eta1oldy,zi1x,zi1y))
+      +int2d(ThS1)((rhoP/delt)*cdot(deta1oldx,deta1oldy,zi1x,zi1y))
+      +int1d(ThS1,3)((gamma/delt)*cdot(eta1oldx,eta1oldy,N.x,N.y)*cdot(zi1x,zi1y,N.x,N.y))
+      +int1d(ThS1,3)((gamma/delt)*cdot(eta1oldx,eta1oldy,-N.y,N.x)*cdot(zi1x,zi1y,-N.y,N.x))
+      +on(2,4, eta1x=0, eta1y=0) +on(1,eta1x=0);
+
+  varf rhs4([uP1x,uP1y],[vP1x,vP1y])= int1d(ThS1,3)((gamma/delt)*cdot(eta1oldx,eta1oldy,N.x,N.y)*cdot(vP1x,vP1y,N.x,N.y))
+       +on(2,4, uP1x=0, uP1y=0);
+
+  varf rhs5(pP1,wP1)= int2d(ThS1)(qp*wP1) + int2d(ThS1)((s0/delt)*(wP1*pP1old)) + int2d(ThS1)((alfa/delt)*wP1*div(eta1oldx,eta1oldy));
+
+  varf rhs6([mu1,mu2],[chi1,chi2])= int1d(ThL,1)((1.0/delt)*cdot(eta1oldx,eta1oldy,-N.x,-N.y)*cdot(chi1,chi2,N.x,N.y))
+        + int1d(ThL,1)((1.0/delt)*cdot(eta1oldx,eta1oldy,N.y,-N.x)*cdot(chi1,chi2,-N.y,N.x)) ;
+
+  //---------------------------------------------------------------------------------
+  // 			      					Stiff matrix
+  //---------------------------------------------------------------------------------
+
+  matrix A11 = a11(VFh,VFh);
+  matrix A12 = a12(Qhpf,VFh);
+  matrix A16 = a16(LLhvector,VFh);
+
+  matrix A21 = a21(VFh,Qhpf);
+  matrix A22 = a22(Qhpf,Qhpf);
+
+  matrix A31 = a31(VFh,VS1h);
+  matrix A33 = a33(VS1h,VS1h);
+  matrix A34 = a34(VM1h,VS1h);
+  matrix A35 = a35(Qhpp,VS1h);
+  matrix A36 = a36(LLhvector,VS1h);
+
+  matrix A41 = a41(VFh,VM1h);
+  matrix A43 = a43(VS1h,VM1h);
+  matrix A44 = a44(VM1h,VM1h);
+  matrix A45 = a45(Qhpp,VM1h);
+  matrix A46 = a46(LLhvector,VM1h);
+
+
+  matrix A53 = a53(VS1h,Qhpp);
+  matrix A54 = a54(VM1h,Qhpp);
+  matrix A55 = a55(Qhpp,Qhpp);
+
+  matrix A61 = a61(VFh,LLhvector);
+  matrix A63 = a63(VS1h,LLhvector);
+  matrix A64 = a64(VM1h,LLhvector);
+  matrix A66 = a66(LLhvector,LLhvector);
+
+
+  //----- Initial condition
+  t = 0.0;
+  //FOR STOKES RHS:- (We need to assign values to old functions/ functions at n-th timestep, so we assign them true values at t=0.0)
+  [uF1oldx,uF1oldy] = [0.0,0.0];
+  
+  //FOR BIOT RHS:-
+  pP1old = 0.0;
+  [eta1oldx,eta1oldy] = [0.0,0.0];
+  //eta1oldx = etap1;//1ST COMPONENT OF VECTOR
+  //eta1oldy = etap2;//2ND COMPONENT OF VECTOR
+  [deta1oldx,deta1oldy] = [0.0,0.0];
+  //deta1oldx = detap1;//1ST COMPONENT OF VECTOR
+  //deta1oldy = detap2;//2ND COMPONENT OF VECTOR
+
+  real[int] sol1(VFh.ndof);
+  real[int] sol2(Qhpf.ndof);
+  real[int] sol3(VS1h.ndof); 
+  real[int] sol4(VM1h.ndof);
+  real[int] sol5(Qhpp.ndof);
+  real[int] sol6(LLhvector.ndof);
+
+  for (int k=1;k<=NN;++k){
+	
+	  t=t+delt;
+    
+    Pin=Pressure(t);
+    cout << " time = " << t<< "and n = "<< n << "and k = "<< k <<endl;
+    //----- RHS data change in time
+    real[int] RHS1 = rhs1(0,VFh);
+    real[int] RHS2 = rhs2(0,Qhpf);
+    real[int] RHS3 = rhs3(0,VS1h);
+    real[int] RHS4 = rhs4(0,VM1h);
+    real[int] RHS5 = rhs5(0,Qhpp);
+    real[int] RHS6 = rhs6(0,LLhvector);  
+   
+    real[int] L = [RHS1,RHS2,RHS3,RHS4,RHS5,RHS6];
+
+    matrix M;{
+    M = [[  A11,     A12,    0,    0,   0,   A16],
+         [  A21,    A22,    0,    0,   0,     0],
+         [  A31,       0,  A33,  A34, A35,   A36],
+         [  A41,       0,  A43,  A44, A45,   A46],
+         [    0,       0,  A53,  A54, A55,     0],
+         [  A61,       0,  A63,  A64,   0,  A66]];}
+    set(M,solver = sparsesolver);
+    real[int] sol = M^-1*L;
+
+    //----- Approximation of the solution
+    [sol1,sol2,sol3,sol4,sol5,sol6] = sol;
+
+    uFx[]   = sol1;
+    pF[]    = sol2;
+    eta1x[] = sol3;
+    uP1x[]  = sol4;
+    pP1[]   = sol5;
+    mu1[]   = sol6;
+
+    //CALCULATING DETA1OLD BECAUSE THIS IS USED WHILE CALCULATING MU_N AND MU_TAU, ALSO IT UPDATES DETA1OLD USED IN BIOT FORMULATION USED IN NEXT STEP
+    //deta1old = (eta1-eta1old)/delt;
+    deta1oldx[] = (1./delt)*eta1x[] - (1./delt)*eta1oldx[];
+    //deta1oldx = (eta1x-eta1oldx)/delt;//1ST COMPONENT OF THE VECTOR
+    //deta1oldy = (eta1y-eta1oldy)/delt;//2ND COMPONENT OF THE VECTOR
+
+    //UPDATE ETA1OLD AND PP1OLD FOR RHS OF BIOT SYSTEM
+    [eta1oldx,eta1oldy] = [eta1x,eta1y];
+    //eta1oldx = eta1x;// 1st COMPONENT OF VECTOR
+    //eta1oldy = eta1y;// 2nd COMPONENT OF VECTOR
+    pP1old = pP1;
+    //UPDATE UFOLD FOR RHS OF STOKES SYSTEM
+    [uF1oldx,uF1oldy]  = [uFx,uFy];// uF1old = [uF1oldx,uF1oldy] 
+    
+    //savevtk("Paraview_monolithicbf9/Stokesapprox"+k+".vtk",ThF,[uFx,uFy,0],pF, dataname="uF pF");
+    //savevtk("Paraview_monolithicbf9/Biotapprox"+k+".vtk",ThS1,[uP1x,uP1y,0], pP1, [eta1x, eta1y, 0], [deta1oldx, deta1oldy, 0], dataname="uP pP eta deta");
+    //----- other values
+    real epss  = 1.e-20;
+
+    solve proj1([pfh0],[wfh0],solver=sparsesolver) =   
+      int1d(ThL,1)(pfh0*wfh0)
+      -int1d(ThL,1)(pF*wfh0)
+      +intalledges(ThL)(epss*(pfh0*wfh0));
+      
+    proj1;
+
+    //solve proj2([pph0],[wph0],solver=sparsesolver) =   
+      //int1d(ThP,3)(pph0*wph0)
+      //-int1d(ThP,3)(pP1*wph0)
+      //+intalledges(ThP)(epss*(pph0*wph0));
+      
+    //proj2;
+    
+    solve proj3a([ufhn],[vfhn],solver=sparsesolver) =   
+      int1d(ThL,1)(ufhn*vfhn)
+      -int1d(ThL,1)(uFy*vfhn)
+      +intalledges(ThL)(epss*(ufhn*vfhn));
+      
+    proj3a;
+
+    //solve proj3b([ufht],[vfht],solver=sparsesolver) =   
+      //int1d(ThL,3)(ufht*vfht)
+      //-int1d(ThL,3)(uFx*vfht)
+      //+intalledges(ThL)(epss*(ufht*vfht));
+      
+    //proj3b;
+
+
+    solve proj4a([uphn],[vphn],solver=sparsesolver) =   
+      int1d(ThP,3)(uphn*vphn)
+      -int1d(ThP,3)(uP1y*vphn)
+      +intalledges(ThP)(epss*(uphn*vphn));
+      
+    proj4a;
+
+    //solve proj4b([upht],[vpht],solver=sparsesolver) =   
+      //int1d(ThP,1)(upht*vpht)
+      //-int1d(ThP,1)((uP1x*(-N.y)+uP1y*(N.x))*vpht)
+      //+intalledges(ThP)(epss*(upht*vpht));
+      
+    //proj4b;
+
+    solve proj5([etahn],[zihn],solver=sparsesolver) =   
+      int1d(ThP,3)(etahn*zihn)
+      -int1d(ThP,3)(eta1y*zihn)
+      +intalledges(ThP)(epss*(etahn*zihn));
+      
+    proj5;
+    
+    savevtk("Paraview_bloodflow79/Stokesapprox"+k+".vtk",ThL,pfh0,ufhn, dataname="pfh0 ufhn");
+    savevtk("Paraview_bloodflow79/Biotapprox"+k+".vtk",ThP,uphn,etahn, dataname="uphn etahn");
+
+
+  }//time loop ends over here.
+
+}//domain mesh loop ends over here.
+
