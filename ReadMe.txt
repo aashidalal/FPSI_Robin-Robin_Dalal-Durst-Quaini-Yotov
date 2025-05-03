@@ -1,9 +1,4 @@
-FPSI_Robin-Robin(Dalal-Durst-Quaini-Yotov).pdf contains the pdf file of the research paper titled, "A Robin-Robin splitting method for the Stokes-Biot fluid-poroelastic
- structure interaction model".
-fpsi-robin-robin-rev.tex is the tex file of the research paper titled, "A Robin-Robin splitting method for the Stokes-Biot fluid-poroelastic
- structure interaction model".
-fpsi-robin-robin.bib is the bibtex file of the research paper titled, "A Robin-Robin splitting method for the Stokes-Biot fluid-poroelastic
- structure interaction model".
+FPSI_Robin-Robin(Dalal-Durst-Quaini-Yotov).pdf contains the pdf file of the research paper titled, "A Robin-Robin splitting method for the Stokes-Biot fluid-poroelastic structure interaction model".
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 CODES, IMAGES, TXT FILES, AND ZIP FOLDERS FOR EXAMPLE 1: CONVERGENCE TEST
